@@ -33,7 +33,6 @@ def main():
 			print(f"Using local APK file: {args.local_apk}")
 			apkfile = os.path.join(tmppath, os.path.basename(args.local_apk))
 			shutil.copy(args.local_apk, apkfile)
-			signAPK(apkfile)
 			print("")
 		else:
 			#Get the APK to patch. Combine app bundles/split APKs into a single APK.
@@ -92,7 +91,7 @@ def main():
 # -> Keystore
 ####################
 def checkDependencies():
-	deps = ["adb", "apktool", "jarsigner", "objection", "zipalign"]
+	deps = ["adb", "apktool", "objection"]
 	missing = []
 	for dep in deps:
 		if shutil.which(dep) is None:
@@ -345,25 +344,15 @@ def combineSplitAPKs(pkgname, localapks, tmppath, disableStylesHack):
 	
 	#Sign the new APK
 	print("[+] Signing new APK.")
-	signAPK(os.path.join(baseapkdir, "dist", baseapkfilename))
-	
-	#Zip align the new APK
-	print("[+] Zip aligning new APK.")
-	ret = subprocess.run([
-			"zipalign", "-f", "4", os.path.join(baseapkdir, "dist", baseapkfilename),
-			os.path.join(baseapkdir, "dist", baseapkfilename[:-4] + "-aligned.apk")
-		],
-		stdout=getStdout()
-	)
+	apkpath = os.path.join(baseapkdir, "dist", baseapkfilename)
+
+	ret = subprocess.run(["objection", "signapk", apkpath],	stdout=getStdout())
 	if ret.returncode != 0:
-		print("Error: Failed to run 'zipalign -f 4 " + os.path.join(baseapkdir, "dist", baseapkfilename) +
-			" " + os.path.join(baseapkdir, "dist", baseapkfilename[:-4] + "-aligned.apk") + "'.\nRun with --debug-output for more information.")
+		print("Error: Failed to run 'objection signapk " + apkpath + "'")
 		sys.exit(1)
-	shutil.move(os.path.join(baseapkdir, "dist", baseapkfilename[:-4] + "-aligned.apk"), os.path.join(baseapkdir, "dist", baseapkfilename))
-	print("")
 	
 	#Return the new APK path
-	return os.path.join(baseapkdir, "dist", baseapkfilename)
+	return apkpath
 
 ####################
 # Attempt to detect ProGuard/AndResGuard.
@@ -641,32 +630,12 @@ def enableUserCerts(apkfile):
 			print("Error: Failed to run 'apktool b " + apkdir + "'.\nRun with --debug-output for more information.")
 			sys.exit(1)
 
-		signAPK(os.path.join(apkdir, "dist", apkname))
-		
-		#Zip align the new APK
-		os.remove(apkfile)
-		ret = subprocess.run(["zipalign", "4", os.path.join(apkdir, "dist", apkname), apkfile], stdout=getStdout())
+		newapkfile = os.path.join(apkdir, "dist", apkname)
+		ret = subprocess.run(["objection", "signapk", newapkfile], stdout=getStdout())
 		if ret.returncode != 0:
-			print("Error: Failed to run 'zipalign 4 " + os.path.join(apkdir, "dist", apkname) + " " + apkfile + "'.\nRun with --debug-output for more information.")
+			print("Error: Failed to run 'objection signapk" + newapkfile + "'")
 			sys.exit(1)
 	print("")
-
-####################
-# New function to sign APKs
-####################
-def signAPK(apkfile):
-	print("[+] Signing APK.")
-	ret = subprocess.run([
-			"jarsigner", "-sigalg", "SHA256withRSA", "-digestalg", "SHA-256", "-keystore",
-			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")),
-			"-storepass", "patch-apk", apkfile, "patch-apk-key"],
-		stdout=getStdout()
-	)
-	if ret.returncode != 0:
-		print("Error: Failed to run 'jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore " +
-			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")) +
-			"-storepass patch-apk " + apkfile + " patch-apk-key'.\nRun with --debug-output for more information.")
-		sys.exit(1)
 
 ####################
 # Main
