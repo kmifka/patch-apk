@@ -18,16 +18,27 @@ def main():
 	#Grab argz
 	args = getArgs()
 	
-	#Verify the package name and ensure it's installed (also supports partial package names)
-	pkgname = verifyPackageName(args.pkgname)
-	
-	#Get the APK path(s) from the device
-	apkpaths = getAPKPathsForPackage(pkgname)
-	
 	#Create a temp directory to work from
 	with tempfile.TemporaryDirectory() as tmppath:
-		#Get the APK to patch. Combine app bundles/split APKs into a single APK.
-		apkfile = getTargetAPK(pkgname, apkpaths, tmppath, args.disable_styles_hack)
+		if args.local_apk:
+			if not os.path.exists(args.local_apk):
+				print(f"Error: Local APK file {args.local_apk} does not exist")
+				sys.exit(1)
+			print(f"Using local APK file: {args.local_apk}")
+			apkfile = os.path.join(tmppath, os.path.basename(args.local_apk))
+			shutil.copy(args.local_apk, apkfile)
+			pkgname = args.pkgname
+			signAPK(apkfile)
+			print("")
+		else:
+			#Verify the package name and ensure it's installed (also supports partial package names)
+			pkgname = verifyPackageName(args.pkgname)
+			
+			#Get the APK path(s) from the device
+			apkpaths = getAPKPathsForPackage(pkgname)
+			
+			#Get the APK to patch. Combine app bundles/split APKs into a single APK.
+			apkfile = getTargetAPK(pkgname, apkpaths, tmppath, args.disable_styles_hack)
 		
 		#Save the APK if requested
 		if args.save_apk is not None:
@@ -39,7 +50,7 @@ def main():
 		print("Patching " + apkfile.split(os.sep)[-1] + " with objection.")
 		ret = None
 		if getObjectionVersion() >= pkg_resources.parse_version("1.9.3"):
-			ret = subprocess.run(["objection", "patchapk", "--skip-resources", "--ignore-nativelibs", "--debug-output", "-s", apkfile], stdout=getStdout())
+			ret = subprocess.run(["objection", "--debug", "patchapk", "--skip-resources", "--ignore-nativelibs", "-s", apkfile], stdout=getStdout())
 		else:
 			ret = subprocess.run(["objection", "patchapk", "--skip-resources", "-s", apkfile], stdout=getStdout())
 		if ret.returncode != 0:
@@ -58,14 +69,6 @@ def main():
 		ret = subprocess.run(["adb", "uninstall", pkgname], stdout=getStdout())
 		if ret.returncode != 0:
 			print("Error: Failed to run 'adb uninstall " + pkgname + "'.\nRun with --debug-output for more information.")
-			sys.exit(1)
-		print("")
-		
-		#Install the patched APK
-		print("Installing the patched APK to the device.")
-		ret = subprocess.run(["adb", "install", apkfile], stdout=getStdout())
-		if ret.returncode != 0:
-			print("Error: Failed to run 'adb install " + apkfile + "'.\nRun with --debug-output for more information.")
 			sys.exit(1)
 		print("")
 		
@@ -117,6 +120,7 @@ def getArgs():
 		parser.add_argument("--save-apk", help="Save a copy of the APK (or single APK) prior to patching for use with other tools.")
 		parser.add_argument("--disable-styles-hack", help="Disable the styles hack that removes duplicate entries from res/values/styles.xml.", action="store_true")
 		parser.add_argument("--debug-output", help="Enable debug output.", action="store_true")
+		parser.add_argument("--local-apk", help="Path to local APK file to patch instead of pulling from device")
 		parser.add_argument("pkgname", help="The name, or partial name, of the package to patch (e.g. com.foo.bar).")
 		
 		#Store the parsed args
@@ -330,18 +334,7 @@ def combineSplitAPKs(pkgname, localapks, tmppath, disableStylesHack):
 	
 	#Sign the new APK
 	print("[+] Signing new APK.")
-	ret = subprocess.run([
-			"jarsigner", "-sigalg", "SHA1withRSA", "-digestalg", "SHA1", "-keystore",
-			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")),
-			"-storepass", "patch-apk", os.path.join(baseapkdir, "dist", baseapkfilename), "patch-apk-key"],
-		stdout=getStdout()
-	)
-	if ret.returncode != 0:
-		print("Error: Failed to run 'jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore " +
-			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")) +
-			"-storepass patch-apk " + os.path.join(baseapkdir, "dist", baseapkfilename) + " patch-apk-key'.\nRun with --debug-output for more information.")
-		sys.exit(1)
-
+	signAPK(os.path.join(baseapkdir, "dist", baseapkfilename))
 	
 	#Zip align the new APK
 	print("[+] Zip aligning new APK.")
@@ -655,6 +648,23 @@ def enableUserCerts(apkfile):
 			print("Error: Failed to run 'zipalign 4 " + os.path.join(apkdir, "dist", apkname) + " " + apkfile + "'.\nRun with --debug-output for more information.")
 			sys.exit(1)
 	print("")
+
+####################
+# New function to sign APKs
+####################
+def signAPK(apkfile):
+	print("[+] Signing APK.")
+	ret = subprocess.run([
+			"jarsigner", "-sigalg", "SHA1withRSA", "-digestalg", "SHA1", "-keystore",
+			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")),
+			"-storepass", "patch-apk", apkfile, "patch-apk-key"],
+		stdout=getStdout()
+	)
+	if ret.returncode != 0:
+		print("Error: Failed to run 'jarsigner -sigalg SHA1withRSA -digestalg SHA1 -keystore " +
+			os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data", "patch-apk.keystore")) +
+			"-storepass patch-apk " + apkfile + " patch-apk-key'.\nRun with --debug-output for more information.")
+		sys.exit(1)
 
 ####################
 # Main
