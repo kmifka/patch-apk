@@ -39,7 +39,7 @@ def main():
 		print("Patching " + apkfile.split(os.sep)[-1] + " with objection.")
 		ret = None
 		if getObjectionVersion() >= pkg_resources.parse_version("1.9.3"):
-			ret = subprocess.run(["objection", "patchapk", "--skip-resources", "--ignore-nativelibs", "-s", apkfile], stdout=getStdout())
+			ret = subprocess.run(["objection", "patchapk", "--skip-resources", "--ignore-nativelibs", "--debug-output", "-s", apkfile], stdout=getStdout())
 		else:
 			ret = subprocess.run(["objection", "patchapk", "--skip-resources", "-s", apkfile], stdout=getStdout())
 		if ret.returncode != 0:
@@ -554,40 +554,50 @@ def hackRemoveDuplicateStyleEntries(baseapkdir):
 # Update AndroidManifest.xml to disable APK splitting.
 # -> Removes the "isSplitRequired" attribute of the "application" element.
 # -> Sets the "extractNativeLibs" attribute of the "application" element.
-# -> Removes meta-data elements with the name "com.android.vending.splits" or "com.android.vending.splits.required"
+# -> Removes meta-data elements with the name "com.android.vending.splits" or "com.android.vending.splits.required".
+# -> Removes problematic fields: android:requiredSplitTypes and android:splitTypes.
 ####################
 def disableApkSplitting(baseapkdir):
-	print("Disabling APK splitting in AndroidManifest.xml of base APK.")
-	
-	#Load AndroidManifest.xml
+	print("Disabling APK splitting and removing problematic fields in AndroidManifest.xml of base APK.")
+
+	# Load AndroidManifest.xml
 	tree = xml.etree.ElementTree.parse(os.path.join(baseapkdir, "AndroidManifest.xml"))
-	
-	#Register the namespaces and get the prefix for the "android" namespace
-	namespaces = dict([node for _,node in xml.etree.ElementTree.iterparse(os.path.join(baseapkdir, "AndroidManifest.xml"), events=["start-ns"])])
+
+	# Register the namespaces and get the prefix for the "android" namespace
+	namespaces = dict([node for _, node in xml.etree.ElementTree.iterparse(os.path.join(baseapkdir, "AndroidManifest.xml"), events=["start-ns"])])
 	for ns in namespaces:
 		xml.etree.ElementTree.register_namespace(ns, namespaces[ns])
 	ns = "{" + namespaces["android"] + "}"
-	
-	#Disable APK splitting
+
+	# Disable APK splitting and remove problematic fields
 	appEl = None
 	elsToRemove = []
 	for el in tree.iter():
 		if el.tag == "application":
 			appEl = el
+			# Remove isSplitRequired attribute
 			if ns + "isSplitRequired" in el.attrib:
 				del el.attrib[ns + "isSplitRequired"]
+			# Ensure extractNativeLibs is set to true
 			if ns + "extractNativeLibs" in el.attrib:
 				el.attrib[ns + "extractNativeLibs"] = "true"
+		elif el.tag == "manifest":
+			# Remove android:requiredSplitTypes and android:splitTypes from the manifest element
+			if ns + "requiredSplitTypes" in el.attrib:
+				del el.attrib[ns + "requiredSplitTypes"]
+			if ns + "splitTypes" in el.attrib:
+				del el.attrib[ns + "splitTypes"]
 		elif appEl is not None and el.tag == "meta-data":
+			# Remove specific meta-data elements
 			if ns + "name" in el.attrib:
-				if el.attrib[ns + "name"] == "com.android.vending.splits.required":
+				if el.attrib[ns + "name"] in ["com.android.vending.splits.required", "com.android.vending.splits"]:
 					elsToRemove.append(el)
-				elif el.attrib[ns + "name"] == "com.android.vending.splits":
-					elsToRemove.append(el)
+
+	# Remove the collected meta-data elements
 	for el in elsToRemove:
 		appEl.remove(el)
-	
-	#Save the updated AndroidManifest.xml
+
+	# Save the updated AndroidManifest.xml
 	tree.write(os.path.join(baseapkdir, "AndroidManifest.xml"), encoding="utf-8", xml_declaration=True)
 	print("")
 
